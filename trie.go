@@ -52,6 +52,12 @@ func NewTrie() *Trie {
 	}
 }
 
+// Sets the option to search invisited named parameter nodes
+func (t *Trie) SearchUnvisitedParams() *Trie {
+	t.searchUnvisitedParams = true
+	return t
+}
+
 // InsertOption is just a function which accepts a pointer to a Node which can alt its `Handler`, `Tag` and `Data`  fields.
 //
 // See `WithHandler`, `WithTag` and `WithData`.
