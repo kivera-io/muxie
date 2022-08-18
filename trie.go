@@ -38,6 +38,13 @@ type Trie struct {
 	// with searchUnvisitedParams == false => not found!
 	// with searchUnvisitedParams == true => found path2
 	searchUnvisitedParams bool
+
+	caseInsensitive bool
+}
+
+type TrieOptions struct {
+	CaseInsensitive       bool
+	SearchUnvisitedParams bool
 }
 
 // NewTrie returns a new, empty Trie.
@@ -48,13 +55,29 @@ func NewTrie() *Trie {
 	return &Trie{
 		root:                  NewNode(),
 		hasRootWildcard:       false,
+		caseInsensitive:       false,
 		searchUnvisitedParams: false,
+	}
+}
+
+func NewTrieWithOptions(options TrieOptions) *Trie {
+	return &Trie{
+		root:                  NewNode(),
+		hasRootWildcard:       false,
+		caseInsensitive:       options.CaseInsensitive,
+		searchUnvisitedParams: options.SearchUnvisitedParams,
 	}
 }
 
 // Sets the option to search invisited named parameter nodes
 func (t *Trie) SearchUnvisitedParams() *Trie {
 	t.searchUnvisitedParams = true
+	return t
+}
+
+// Sets the trie to match paths without case sensitivity
+func (t *Trie) CaseInsensitive() *Trie {
+	t.caseInsensitive = true
 	return t
 }
 
@@ -168,6 +191,10 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 			}
 		}
 
+		if t.caseInsensitive {
+			s = strings.ToLower(s)
+		}
+
 		if !n.hasChild(s) {
 			child := NewNode()
 			n.addChild(s, child)
@@ -195,6 +222,9 @@ func (t *Trie) SearchPrefix(prefix string) *Node {
 
 	for i := 0; i < len(input); i++ {
 		s := input[i]
+		if t.caseInsensitive {
+			s = strings.ToLower(s)
+		}
 		if child := n.getChild(s); child != nil {
 			n = child
 			continue
@@ -302,7 +332,11 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 
 	for {
 		if i == end || q[i] == pathSepB {
-			if child := n.getChild(q[start:i]); child != nil {
+			s := q[start:i]
+			if t.caseInsensitive {
+				s = strings.ToLower(s)
+			}
+			if child := n.getChild(s); child != nil {
 				n = child
 
 			} else if n.childNamedParameter { // && n.childWildcardParameter == false {
