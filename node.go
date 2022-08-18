@@ -16,6 +16,8 @@ type Node struct {
 	childNamedParameter    bool // is the child a named parameter (single segmnet)
 	childWildcardParameter bool // or it is a wildcard (can be more than one path segments) ?
 
+	paramCount int
+
 	paramKeys []string // the param keys without : or *.
 	end       bool     // it is a complete node, here we stop and we can say that the node is valid.
 	key       string   // if end == true then key is filled with the original value of the insertion's key.
@@ -73,6 +75,28 @@ func (n *Node) findClosestParentWildcardNode() *Node {
 	}
 
 	return nil
+}
+
+func (n *Node) findClosestUnvisitedNode(visitedNodes map[*Node]struct{}, path string, i int) (*Node, int, int) {
+	n = n.parent
+	var start int
+	for n != nil {
+		i = strings.LastIndex(path[:i], pathSep)
+		if i == -1 {
+			i = 0
+		}
+		start = strings.LastIndex(path[:i], pathSep) + 1
+		if n.childNamedParameter {
+			child := n.getChild(ParamStart)
+			if _, visited := visitedNodes[child]; !visited {
+				return child, start, i
+			}
+		}
+
+		n = n.parent
+	}
+
+	return nil, start, i
 }
 
 // NodeKeysSorter is the type definition for the sorting logic

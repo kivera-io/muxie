@@ -1,3 +1,3 @@
-module github.com/kataras/muxie
+module github.com/kivera-io/muxie
 
 go 1.15

@@ -28,6 +28,16 @@ type Trie struct {
 	hasRootWildcard bool
 
 	hasRootSlash bool
+
+	// If true then named path parameters that weren't explored will be considered if no match is found,
+	// useful in situations where a named parameter value conflicts with segment in a fixed path.
+	// For example:
+	// path1: /a/b/c/z
+	// path2: /a/:p1/c/d
+	// req: http://localhost:8080/a/b/c/d
+	// with searchUnvisitedParams == false => not found!
+	// with searchUnvisitedParams == true => found path2
+	searchUnvisitedParams bool
 }
 
 // NewTrie returns a new, empty Trie.
@@ -36,8 +46,9 @@ type Trie struct {
 // See `Trie`
 func NewTrie() *Trie {
 	return &Trie{
-		root:            NewNode(),
-		hasRootWildcard: false,
+		root:                  NewNode(),
+		hasRootWildcard:       false,
+		searchUnvisitedParams: false,
 	}
 }
 
@@ -130,6 +141,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 
 	for _, s := range input {
 		c := s[0]
+		n.paramCount = len(paramKeys)
 
 		if isParam, isWildcard := c == ParamStart[0], c == WildcardParamStart[0]; isParam || isWildcard {
 			n.hasDynamicChild = true
@@ -231,6 +243,24 @@ type ParamsSetter interface {
 	Set(string, string)
 }
 
+// Append a parameter value to the paramValues slice
+func appendParameterValue(paramValues *[]string, value string) {
+	if ln := len(*paramValues); cap(*paramValues) > ln {
+		*paramValues = (*paramValues)[:ln+1]
+		(*paramValues)[ln] = value
+	} else {
+		*paramValues = append(*paramValues, value)
+	}
+}
+
+// Helper function to return the minimum of two ints
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // Search is the most important part of the Trie.
 // It will try to find the responsible node for a specific query (or a request path for HTTP endpoints).
 //
@@ -240,8 +270,9 @@ type ParamsSetter interface {
 // 1. static paths
 // 2. named parameters with ":"
 // 3. wildcards
-// 4. closest wildcard if not found, if any
-// 5. root wildcard
+// 4. fixed segments treated as named parameters (if searchUnvisitedParams == true)
+// 5. closest wildcard if not found, if any
+// 6. root wildcard
 func (t *Trie) Search(q string, params ParamsSetter) *Node {
 	end := len(q)
 
@@ -261,52 +292,71 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 	start := 1
 	i := 1
 	var paramValues []string
+	visitedNodes := map[*Node]struct{}{}
 
 	for {
 		if i == end || q[i] == pathSepB {
 			if child := n.getChild(q[start:i]); child != nil {
 				n = child
+
 			} else if n.childNamedParameter { // && n.childWildcardParameter == false {
 				n = n.getChild(ParamStart)
-				if ln := len(paramValues); cap(paramValues) > ln {
-					paramValues = paramValues[:ln+1]
-					paramValues[ln] = q[start:i]
-				} else {
-					paramValues = append(paramValues, q[start:i])
-				}
+				visitedNodes[n] = struct{}{}
+				appendParameterValue(&paramValues, q[start:i])
+
 			} else if n.childWildcardParameter {
 				n = n.getChild(WildcardParamStart)
-				if ln := len(paramValues); cap(paramValues) > ln {
-					paramValues = paramValues[:ln+1]
-					paramValues[ln] = q[start:]
-				} else {
-					paramValues = append(paramValues, q[start:])
-				}
+				appendParameterValue(&paramValues, q[start:])
 				break
-			} else {
-				n = n.findClosestParentWildcardNode()
-				if n != nil {
-					// means that it has :param/static and *wildcard, we go trhough the :param
-					// but the next path segment is not the /static, so go back to *wildcard
-					// instead of not found.
-					//
-					// Fixes:
-					// /hello/*p
-					// /hello/:p1/static/:p2
-					// req: http://localhost:8080/hello/dsadsa/static/dsadsa => found
-					// req: http://localhost:8080/hello/dsadsa => but not found!
-					// and
-					// /second/wild/*p
-					// /second/wild/static/otherstatic/
-					// req: /second/wild/static/otherstatic/random => but not found!
-					params.Set(n.paramKeys[0], q[len(n.staticKey):])
-					return n
-				}
 
-				return nil
+			} else {
+				var unvisited *Node
+				if t.searchUnvisitedParams {
+					unvisited, start, i = n.findClosestUnvisitedNode(visitedNodes, q, i)
+				}
+				if unvisited != nil {
+					n = unvisited
+					visitedNodes[n] = struct{}{}
+					lim := min(n.paramCount, cap(paramValues))
+					paramValues = paramValues[:lim]
+					appendParameterValue(&paramValues, q[start:i])
+				} else {
+					n = n.findClosestParentWildcardNode()
+					if n != nil {
+						// means that it has :param/static and *wildcard, we go trhough the :param
+						// but the next path segment is not the /static, so go back to *wildcard
+						// instead of not found.
+						//
+						// Fixes:
+						// /hello/*p
+						// /hello/:p1/static/:p2
+						// req: http://localhost:8080/hello/dsadsa/static/dsadsa => found
+						// req: http://localhost:8080/hello/dsadsa => but not found!
+						// and
+						// /second/wild/*p
+						// /second/wild/static/otherstatic/
+						// req: /second/wild/static/otherstatic/random => but not found!
+						params.Set(n.paramKeys[0], q[len(n.staticKey):])
+						return n
+					}
+					return nil
+
+				}
 			}
 
 			if i == end {
+				if t.searchUnvisitedParams && !n.end {
+					n, start, i = n.findClosestUnvisitedNode(visitedNodes, q, i)
+					if n != nil {
+						visitedNodes[n] = struct{}{}
+						lim := min(n.paramCount, cap(paramValues))
+						paramValues = paramValues[:lim]
+						appendParameterValue(&paramValues, q[start:i])
+					}
+					if i == end {
+						break
+					}
+				}
 				break
 			}
 
