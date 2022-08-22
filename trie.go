@@ -13,6 +13,10 @@ const (
 	// but the Trie checks for static paths and named parameters before that in order to support everything that other implementations do not,
 	// and if nothing else found then it tries to find the closest wildcard path(super and unique).
 	WildcardParamStart = "*"
+
+	PrefixParamStart = "+:"
+
+	PrefixWildcardParamStart = "+*"
 )
 
 // Trie contains the main logic for adding and searching nodes for path segments.
@@ -158,6 +162,14 @@ func resolveStaticPart(key string) string {
 	return key[:i]
 }
 
+func isPrefixParam(key string) bool {
+	return strings.Contains(key, PrefixParamStart)
+}
+
+func isPrefixWildcardParam(key string) bool {
+	return strings.Contains(key, PrefixWildcardParamStart)
+}
+
 func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Handler) *Node {
 	input := slowPathSplit(key)
 
@@ -168,13 +180,21 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 
 	var paramKeys []string
 
-	for _, s := range input {
+	for i, s := range input {
 		c := s[0]
+		n.pathIndex = i + 1
 		n.paramCount = len(paramKeys)
 
-		if isParam, isWildcard := c == ParamStart[0], c == WildcardParamStart[0]; isParam || isWildcard {
+		if isParam, isWildcard, isPrefixParam, isPrefixWildcardParam := c == ParamStart[0], c == WildcardParamStart[0], isPrefixParam(s), isPrefixWildcardParam(s); isParam || isWildcard || isPrefixParam || isPrefixWildcardParam {
 			n.hasDynamicChild = true
-			paramKeys = append(paramKeys, s[1:]) // without : or *.
+
+			if isPrefixParam {
+				paramKeys = append(paramKeys, s[strings.Index(key, PrefixParamStart)+2:])
+			} else if isPrefixWildcardParam {
+				paramKeys = append(paramKeys, s[strings.Index(key, PrefixWildcardParamStart)+2:])
+			} else {
+				paramKeys = append(paramKeys, s[1:]) // without : or *.
+			}
 
 			// if node has already a wildcard, don't force a value, check for true only.
 			if isParam {
@@ -188,6 +208,24 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 				if t.root == n {
 					t.hasRootWildcard = true
 				}
+			}
+
+			if t.caseInsensitive {
+				s = strings.ToLower(s)
+			}
+
+			if isPrefixParam {
+				n.childPrefixParameter = true
+				s = s[:strings.Index(key, PrefixParamStart)]
+				n.addPrefixParam(s)
+				s += PrefixParamStart
+			}
+
+			if isPrefixWildcardParam {
+				n.childPrefixWildcardParameter = true
+				s = s[:strings.Index(key, PrefixWildcardParamStart)]
+				n.addPrefixWildcardParam(s)
+				s += PrefixWildcardParamStart
 			}
 		}
 
@@ -339,10 +377,20 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 			if child := n.getChild(s); child != nil {
 				n = child
 
-			} else if n.childNamedParameter { // && n.childWildcardParameter == false {
+			} else if n.childNamedParameter {
 				n = n.getChild(ParamStart)
 				visitedNodes[n] = struct{}{}
 				appendParameterValue(&paramValues, q[start:i])
+
+			} else if child, exists := n.getPrefixParamChild(s); exists {
+				n = child
+				visitedNodes[n] = struct{}{}
+				appendParameterValue(&paramValues, q[start:i])
+
+			} else if child, exists := n.getPrefixWildcardParamChild(s); exists {
+				n = child
+				appendParameterValue(&paramValues, q[start:])
+				break
 
 			} else if n.childWildcardParameter {
 				n = n.getChild(WildcardParamStart)
@@ -361,7 +409,7 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 					paramValues = paramValues[:lim]
 					appendParameterValue(&paramValues, q[start:i])
 				} else {
-					n = n.findClosestParentWildcardNode()
+					n = n.findClosestParentWildcardNode(q)
 					if n != nil {
 						// means that it has :param/static and *wildcard, we go trhough the :param
 						// but the next path segment is not the /static, so go back to *wildcard
@@ -410,7 +458,7 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 
 	if n == nil || !n.end {
 		if n != nil { // we need it on both places, on last segment (below) or on the first unnknown (above).
-			if n = n.findClosestParentWildcardNode(); n != nil {
+			if n = n.findClosestParentWildcardNode(q); n != nil {
 				params.Set(n.paramKeys[0], q[len(n.staticKey):])
 				return n
 			}

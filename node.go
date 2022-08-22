@@ -11,11 +11,17 @@ import (
 type Node struct {
 	parent *Node
 
-	children               map[string]*Node
-	hasDynamicChild        bool // does one of the children contains a parameter or wildcard?
-	childNamedParameter    bool // is the child a named parameter (single segmnet)
-	childWildcardParameter bool // or it is a wildcard (can be more than one path segments) ?
+	children                     map[string]*Node
+	hasDynamicChild              bool // does one of the children contains a parameter or wildcard?
+	childNamedParameter          bool // is the child a named parameter (single segmnet)
+	childWildcardParameter       bool // or it is a wildcard (can be more than one path segments) ?
+	childPrefixParameter         bool // or it is a prefixed parameter
+	childPrefixWildcardParameter bool // or it is a prefixed wildcard parameter
 
+	childPrefixParams         []string
+	childPrefixWildcardParams []string
+
+	pathIndex  int
 	paramCount int
 
 	paramKeys []string // the param keys without : or *.
@@ -52,6 +58,35 @@ func (n *Node) addChild(s string, child *Node) {
 	n.children[s] = child
 }
 
+func (n *Node) addPrefixParam(s string) {
+	addPrefix(&n.childPrefixParams, s)
+}
+
+func (n *Node) addPrefixWildcardParam(s string) {
+	addPrefix(&n.childPrefixWildcardParams, s)
+
+}
+
+func addPrefix(paramSlice *[]string, s string) {
+	if paramSlice == nil {
+		paramSlice = &[]string{s}
+	} else {
+		*paramSlice = append(*paramSlice, s)
+		paramDesc := []string{}
+		m := map[string]struct{}{}
+		for _, val := range *paramSlice {
+			if _, ok := m[val]; !ok {
+				m[val] = struct{}{}
+				paramDesc = append(paramDesc, val)
+			}
+		}
+		sort.Slice(paramDesc, func(i, j int) bool {
+			return len(paramDesc[i]) > len(paramDesc[j])
+		})
+		paramSlice = &paramDesc
+	}
+}
+
 func (n *Node) getChild(s string) *Node {
 	if n.children == nil {
 		return nil
@@ -64,10 +99,37 @@ func (n *Node) hasChild(s string) bool {
 	return n.getChild(s) != nil
 }
 
-func (n *Node) findClosestParentWildcardNode() *Node {
+func (n *Node) getPrefixParamChild(s string) (*Node, bool) {
+	if !n.childPrefixParameter {
+		return nil, false
+	}
+	for _, prefix := range n.childPrefixParams {
+		if strings.HasPrefix(s, prefix) {
+			return n.children[s+PrefixParamStart], true
+		}
+	}
+	return nil, false
+}
+
+func (n *Node) getPrefixWildcardParamChild(s string) (*Node, bool) {
+	if !n.childPrefixWildcardParameter {
+		return nil, false
+	}
+	for _, prefix := range n.childPrefixWildcardParams {
+		if strings.HasPrefix(s, prefix) {
+			return n.children[s+PrefixWildcardParamStart], true
+		}
+	}
+	return nil, false
+}
+
+func (n *Node) findClosestParentWildcardNode(path string) *Node {
 	n = n.parent
 	for n != nil {
-		if n.childWildcardParameter {
+		segment := strings.Split(path, pathSep)[n.pathIndex]
+		if child, exists := n.getPrefixWildcardParamChild(segment); exists {
+			return child
+		} else if n.childWildcardParameter {
 			return n.getChild(WildcardParamStart)
 		}
 
@@ -86,8 +148,13 @@ func (n *Node) findClosestUnvisitedNode(visitedNodes map[*Node]struct{}, path st
 			i = 0
 		}
 		start = strings.LastIndex(path[:i], pathSep) + 1
+		segment := strings.Split(path, pathSep)[n.pathIndex]
 		if n.childNamedParameter {
 			child := n.getChild(ParamStart)
+			if _, visited := visitedNodes[child]; !visited {
+				return child, start, i
+			}
+		} else if child, exists := n.getPrefixParamChild(segment); exists {
 			if _, visited := visitedNodes[child]; !visited {
 				return child, start, i
 			}
