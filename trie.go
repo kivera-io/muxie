@@ -187,11 +187,13 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 
 		if isParam, isWildcard, isPrefixParam, isPrefixWildcardParam := c == ParamStart[0], c == WildcardParamStart[0], isPrefixParam(s), isPrefixWildcardParam(s); isParam || isWildcard || isPrefixParam || isPrefixWildcardParam {
 			n.hasDynamicChild = true
-
+			var indx int
 			if isPrefixParam {
-				paramKeys = append(paramKeys, s[strings.Index(key, PrefixParamStart)+2:])
+				indx = strings.Index(s, PrefixParamStart)
+				paramKeys = append(paramKeys, s[indx+2:])
 			} else if isPrefixWildcardParam {
-				paramKeys = append(paramKeys, s[strings.Index(key, PrefixWildcardParamStart)+2:])
+				indx = strings.Index(s, PrefixWildcardParamStart)
+				paramKeys = append(paramKeys, s[indx+2:])
 			} else {
 				paramKeys = append(paramKeys, s[1:]) // without : or *.
 			}
@@ -210,22 +212,16 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 				}
 			}
 
-			if t.caseInsensitive {
-				s = strings.ToLower(s)
-			}
-
 			if isPrefixParam {
 				n.childPrefixParameter = true
-				s = s[:strings.Index(key, PrefixParamStart)]
-				n.addPrefixParam(s)
-				s += PrefixParamStart
+				n.addPrefixLength(indx)
+				s = s[:indx+2]
 			}
 
 			if isPrefixWildcardParam {
 				n.childPrefixWildcardParameter = true
-				s = s[:strings.Index(key, PrefixWildcardParamStart)]
-				n.addPrefixWildcardParam(s)
-				s += PrefixWildcardParamStart
+				n.addPrefixWildcardLength(indx)
+				s = s[:indx+2]
 			}
 		}
 
@@ -377,11 +373,6 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 			if child := n.getChild(s); child != nil {
 				n = child
 
-			} else if n.childNamedParameter {
-				n = n.getChild(ParamStart)
-				visitedNodes[n] = struct{}{}
-				appendParameterValue(&paramValues, q[start:i])
-
 			} else if child, exists := n.getPrefixParamChild(s); exists {
 				n = child
 				visitedNodes[n] = struct{}{}
@@ -391,6 +382,11 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 				n = child
 				appendParameterValue(&paramValues, q[start:])
 				break
+
+			} else if n.childNamedParameter {
+				n = n.getChild(ParamStart)
+				visitedNodes[n] = struct{}{}
+				appendParameterValue(&paramValues, q[start:i])
 
 			} else if n.childWildcardParameter {
 				n = n.getChild(WildcardParamStart)
