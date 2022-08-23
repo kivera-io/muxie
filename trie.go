@@ -364,12 +364,16 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 	var paramValues []string
 	visitedNodes := map[*Node]struct{}{}
 
+	var qc string
+	if t.caseInsensitive {
+		qc = strings.ToLower(q)
+	} else {
+		qc = q
+	}
+
 	for {
 		if i == end || q[i] == pathSepB {
-			s := q[start:i]
-			if t.caseInsensitive {
-				s = strings.ToLower(s)
-			}
+			s := qc[start:i]
 			if child := n.getChild(s); child != nil {
 				n = child
 
@@ -396,7 +400,7 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 			} else {
 				var unvisited *Node
 				if t.searchUnvisitedParams {
-					unvisited, start, i = n.findClosestUnvisitedNode(visitedNodes, q, i)
+					unvisited, start, i = n.findClosestUnvisitedNode(visitedNodes, qc, i)
 				}
 				if unvisited != nil {
 					n = unvisited
@@ -405,7 +409,7 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 					paramValues = paramValues[:lim]
 					appendParameterValue(&paramValues, q[start:i])
 				} else {
-					n = n.findClosestParentWildcardNode(q)
+					n = n.findClosestParentWildcardNode(qc)
 					if n != nil {
 						// means that it has :param/static and *wildcard, we go trhough the :param
 						// but the next path segment is not the /static, so go back to *wildcard
@@ -430,7 +434,7 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 
 			if i == end {
 				if t.searchUnvisitedParams && !n.end {
-					n, start, i = n.findClosestUnvisitedNode(visitedNodes, q, i)
+					n, start, i = n.findClosestUnvisitedNode(visitedNodes, qc, i)
 					if n != nil {
 						visitedNodes[n] = struct{}{}
 						lim := min(n.paramCount, cap(paramValues))
@@ -454,7 +458,7 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 
 	if n == nil || !n.end {
 		if n != nil { // we need it on both places, on last segment (below) or on the first unnknown (above).
-			if n = n.findClosestParentWildcardNode(q); n != nil {
+			if n = n.findClosestParentWildcardNode(qc); n != nil {
 				params.Set(n.paramKeys[0], q[len(n.staticKey):])
 				return n
 			}
