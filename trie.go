@@ -398,15 +398,15 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 				visitedNodes[n] = struct{}{}
 				appendParameterValue(&paramValues, q[start:i])
 
-			} else if child, exists := n.getPrefixWildcardParamChild(s); exists {
-				n = child
-				appendParameterValue(&paramValues, q[start:])
-				break
-
 			} else if n.childNamedParameter {
 				n = n.getChild(ParamStart)
 				visitedNodes[n] = struct{}{}
 				appendParameterValue(&paramValues, q[start:i])
+
+			} else if child, exists := n.getPrefixWildcardParamChild(s); exists {
+				n = child
+				appendParameterValue(&paramValues, q[start:])
+				break
 
 			} else if n.childWildcardParameter {
 				n = n.getChild(WildcardParamStart)
