@@ -16,6 +16,8 @@ const (
 
 	PrefixParamStart = "+:"
 
+	SuffixParamStart = ":+"
+
 	PrefixWildcardParamStart = "+*"
 )
 
@@ -170,6 +172,10 @@ func isPrefixWildcardParam(key string) bool {
 	return strings.Contains(key, PrefixWildcardParamStart)
 }
 
+func isSuffixParam(key string) bool {
+	return strings.Contains(key, SuffixParamStart)
+}
+
 func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Handler) *Node {
 	input := slowPathSplit(key)
 
@@ -185,43 +191,48 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 		n.pathIndex = i + 1
 		n.paramCount = len(paramKeys)
 
-		if isParam, isWildcard, isPrefixParam, isPrefixWildcardParam := c == ParamStart[0], c == WildcardParamStart[0], isPrefixParam(s), isPrefixWildcardParam(s); isParam || isWildcard || isPrefixParam || isPrefixWildcardParam {
+		if isParam, isWildcard, isPrefixParam, isPrefixWildcardParam, isSuffixParam := c == ParamStart[0], c == WildcardParamStart[0], isPrefixParam(s), isPrefixWildcardParam(s), isSuffixParam(s); isParam || isWildcard || isPrefixParam || isPrefixWildcardParam || isSuffixParam {
 			n.hasDynamicChild = true
 			var indx int
+
 			if isPrefixParam {
 				indx = strings.Index(s, PrefixParamStart)
 				paramKeys = append(paramKeys, s[indx+2:])
+
+				n.childPrefixParameter = true
+				n.addPrefixLength(indx)
+				s = s[:indx+2]
+
+			} else if isSuffixParam {
+				indx = strings.Index(s, SuffixParamStart)
+				paramKeys = append(paramKeys, s[:indx])
+
+				n.childSuffixParameter = true
+				n.addSuffixLength(len(s) - (indx + 2))
+				s = s[indx:]
+
 			} else if isPrefixWildcardParam {
 				indx = strings.Index(s, PrefixWildcardParamStart)
 				paramKeys = append(paramKeys, s[indx+2:])
-			} else {
-				paramKeys = append(paramKeys, s[1:]) // without : or *.
-			}
 
-			// if node has already a wildcard, don't force a value, check for true only.
-			if isParam {
+				n.childPrefixWildcardParameter = true
+				n.addPrefixWildcardLength(indx)
+				s = s[:indx+2]
+
+			} else if isParam {
+				paramKeys = append(paramKeys, s[1:]) // without :
+
 				n.childNamedParameter = true
 				s = ParamStart
-			}
 
-			if isWildcard {
+			} else if isWildcard {
+				paramKeys = append(paramKeys, s[1:]) // without *
+
 				n.childWildcardParameter = true
 				s = WildcardParamStart
 				if t.root == n {
 					t.hasRootWildcard = true
 				}
-			}
-
-			if isPrefixParam {
-				n.childPrefixParameter = true
-				n.addPrefixLength(indx)
-				s = s[:indx+2]
-			}
-
-			if isPrefixWildcardParam {
-				n.childPrefixWildcardParameter = true
-				n.addPrefixWildcardLength(indx)
-				s = s[:indx+2]
 			}
 		}
 
@@ -378,6 +389,11 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 				n = child
 
 			} else if child, exists := n.getPrefixParamChild(s); exists {
+				n = child
+				visitedNodes[n] = struct{}{}
+				appendParameterValue(&paramValues, q[start:i])
+
+			} else if child, exists := n.getSuffixParamChild(s); exists {
 				n = child
 				visitedNodes[n] = struct{}{}
 				appendParameterValue(&paramValues, q[start:i])

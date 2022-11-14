@@ -17,9 +17,11 @@ type Node struct {
 	childWildcardParameter       bool // or it is a wildcard (can be more than one path segments) ?
 	childPrefixParameter         bool // or it is a prefixed parameter
 	childPrefixWildcardParameter bool // or it is a prefixed wildcard parameter
+	childSuffixParameter         bool // or it is a suffixed parameter
 
 	childPrefixLengths         []int
 	childPrefixWildcardLengths []int
+	childSuffixLengths         []int
 
 	pathIndex  int
 	paramCount int
@@ -59,14 +61,18 @@ func (n *Node) addChild(s string, child *Node) {
 }
 
 func (n *Node) addPrefixLength(l int) {
-	addPrefix(&n.childPrefixLengths, l)
+	addLength(&n.childPrefixLengths, l)
 }
 
 func (n *Node) addPrefixWildcardLength(l int) {
-	addPrefix(&n.childPrefixWildcardLengths, l)
+	addLength(&n.childPrefixWildcardLengths, l)
 }
 
-func addPrefix(paramSlice *[]int, l int) {
+func (n *Node) addSuffixLength(l int) {
+	addLength(&n.childSuffixLengths, l)
+}
+
+func addLength(paramSlice *[]int, l int) {
 	if paramSlice == nil {
 		paramSlice = &[]int{l}
 	} else {
@@ -103,12 +109,12 @@ func (n *Node) getPrefixParamChild(s string) (*Node, bool) {
 		return nil, false
 	}
 	sLen := len(s)
-	for _, len := range n.childPrefixLengths {
+	for _, indx := range n.childPrefixLengths {
 		// Lengths are in descending order
-		if len > sLen {
-			break
+		if indx > sLen {
+			continue
 		}
-		child := n.getChild(s[:len] + PrefixParamStart)
+		child := n.getChild(s[:indx] + PrefixParamStart)
 		if child != nil {
 			return child, true
 		}
@@ -121,12 +127,31 @@ func (n *Node) getPrefixWildcardParamChild(s string) (*Node, bool) {
 		return nil, false
 	}
 	sLen := len(s)
-	for _, len := range n.childPrefixWildcardLengths {
+	for _, indx := range n.childPrefixWildcardLengths {
 		// Lengths are in descending order
-		if len > sLen {
-			break
+		if indx > sLen {
+			continue
 		}
-		child := n.getChild(s[:len] + PrefixWildcardParamStart)
+		child := n.getChild(s[:indx] + PrefixWildcardParamStart)
+		if child != nil {
+			return child, true
+		}
+	}
+	return nil, false
+}
+
+func (n *Node) getSuffixParamChild(s string) (*Node, bool) {
+	if !n.childSuffixParameter {
+		return nil, false
+	}
+	sLen := len(s)
+	for _, suffixLen := range n.childSuffixLengths {
+		// Lengths are in descending order
+		indx := sLen - suffixLen
+		if indx < 0 {
+			continue
+		}
+		child := n.getChild(SuffixParamStart + s[indx:])
 		if child != nil {
 			return child, true
 		}
@@ -161,6 +186,10 @@ func (n *Node) findClosestUnvisitedNode(visitedNodes map[*Node]struct{}, path st
 		start = strings.LastIndex(path[:i], pathSep) + 1
 		segment := strings.Split(path, pathSep)[n.pathIndex]
 		if child, exists := n.getPrefixParamChild(segment); exists {
+			if _, visited := visitedNodes[child]; !visited {
+				return child, start, i
+			}
+		} else if child, exists := n.getSuffixParamChild(segment); exists {
 			if _, visited := visitedNodes[child]; !visited {
 				return child, start, i
 			}
