@@ -11,17 +11,15 @@ import (
 type Node struct {
 	parent *Node
 
-	children                     map[string]*Node
-	hasDynamicChild              bool // does one of the children contains a parameter or wildcard?
-	childNamedParameter          bool // is the child a named parameter (single segmnet)
-	childWildcardParameter       bool // or it is a wildcard (can be more than one path segments) ?
-	childPrefixParameter         bool // or it is a prefixed parameter
-	childPrefixWildcardParameter bool // or it is a prefixed wildcard parameter
-	childSuffixParameter         bool // or it is a suffixed parameter
+	children               map[string]*Node
+	hasDynamicChild        bool // does one of the children contains a parameter or wildcard?
+	childNamedParameter    bool // is the child a named parameter (single segmnet)
+	childWildcardParameter bool // or it is a wildcard (can be more than one path segments) ?
+	childPrefixParameter   bool // or it is a prefixed parameter
+	childSuffixParameter   bool // or it is a suffixed parameter
 
-	childPrefixLengths         []int
-	childPrefixWildcardLengths []int
-	childSuffixLengths         []int
+	childPrefixLengths []int
+	childSuffixLengths []int
 
 	pathIndex  int
 	paramCount int
@@ -62,10 +60,6 @@ func (n *Node) addChild(s string, child *Node) {
 
 func (n *Node) addPrefixLength(l int) {
 	addLength(&n.childPrefixLengths, l)
-}
-
-func (n *Node) addPrefixWildcardLength(l int) {
-	addLength(&n.childPrefixWildcardLengths, l)
 }
 
 func (n *Node) addSuffixLength(l int) {
@@ -122,24 +116,6 @@ func (n *Node) getPrefixParamChild(s string) (*Node, bool) {
 	return nil, false
 }
 
-func (n *Node) getPrefixWildcardParamChild(s string) (*Node, bool) {
-	if !n.childPrefixWildcardParameter {
-		return nil, false
-	}
-	sLen := len(s)
-	for _, indx := range n.childPrefixWildcardLengths {
-		// Lengths are in descending order
-		if indx > sLen {
-			continue
-		}
-		child := n.getChild(s[:indx] + PrefixWildcardParamStart)
-		if child != nil {
-			return child, true
-		}
-	}
-	return nil, false
-}
-
 func (n *Node) getSuffixParamChild(s string) (*Node, bool) {
 	if !n.childSuffixParameter {
 		return nil, false
@@ -159,16 +135,12 @@ func (n *Node) getSuffixParamChild(s string) (*Node, bool) {
 	return nil, false
 }
 
-func (n *Node) findClosestParentWildcardNode(path string) *Node {
+func (n *Node) findClosestParentWildcardNode() *Node {
 	n = n.parent
 	for n != nil {
-		segment := strings.Split(path, pathSep)[n.pathIndex]
-		if child, exists := n.getPrefixWildcardParamChild(segment); exists {
-			return child
-		} else if n.childWildcardParameter {
+		if n.childWildcardParameter {
 			return n.getChild(WildcardParamStart)
 		}
-
 		n = n.parent
 	}
 
