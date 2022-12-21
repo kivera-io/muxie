@@ -16,7 +16,7 @@ const (
 
 	PrefixParamStart = "+:"
 
-	PrefixWildcardParamStart = "+*"
+	SuffixParamStart = "-:"
 )
 
 // Trie contains the main logic for adding and searching nodes for path segments.
@@ -166,8 +166,8 @@ func isPrefixParam(key string) bool {
 	return strings.Contains(key, PrefixParamStart)
 }
 
-func isPrefixWildcardParam(key string) bool {
-	return strings.Contains(key, PrefixWildcardParamStart)
+func isSuffixParam(key string) bool {
+	return strings.Contains(key, SuffixParamStart)
 }
 
 func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Handler) *Node {
@@ -185,43 +185,40 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 		n.pathIndex = i + 1
 		n.paramCount = len(paramKeys)
 
-		if isParam, isWildcard, isPrefixParam, isPrefixWildcardParam := c == ParamStart[0], c == WildcardParamStart[0], isPrefixParam(s), isPrefixWildcardParam(s); isParam || isWildcard || isPrefixParam || isPrefixWildcardParam {
+		if isParam, isWildcard, isPrefixParam, isSuffixParam := c == ParamStart[0], c == WildcardParamStart[0], isPrefixParam(s), isSuffixParam(s); isParam || isWildcard || isPrefixParam || isSuffixParam {
 			n.hasDynamicChild = true
 			var indx int
-			if isPrefixParam {
-				indx = strings.Index(s, PrefixParamStart)
-				paramKeys = append(paramKeys, s[indx+2:])
-			} else if isPrefixWildcardParam {
-				indx = strings.Index(s, PrefixWildcardParamStart)
-				paramKeys = append(paramKeys, s[indx+2:])
-			} else {
-				paramKeys = append(paramKeys, s[1:]) // without : or *.
-			}
 
-			// if node has already a wildcard, don't force a value, check for true only.
 			if isParam {
+				paramKeys = append(paramKeys, s[1:]) // without :
+
 				n.childNamedParameter = true
 				s = ParamStart
-			}
 
-			if isWildcard {
+			} else if isWildcard {
+				paramKeys = append(paramKeys, s[1:]) // without *
+
 				n.childWildcardParameter = true
 				s = WildcardParamStart
 				if t.root == n {
 					t.hasRootWildcard = true
 				}
-			}
 
-			if isPrefixParam {
+			} else if isPrefixParam {
+				indx = strings.Index(s, PrefixParamStart)
+				paramKeys = append(paramKeys, s[indx+2:])
+
 				n.childPrefixParameter = true
 				n.addPrefixLength(indx)
 				s = s[:indx+2]
-			}
 
-			if isPrefixWildcardParam {
-				n.childPrefixWildcardParameter = true
-				n.addPrefixWildcardLength(indx)
-				s = s[:indx+2]
+			} else if isSuffixParam {
+				indx = strings.Index(s, SuffixParamStart)
+				paramKeys = append(paramKeys, s[:indx])
+
+				n.childSuffixParameter = true
+				n.addSuffixLength(len(s) - (indx + 2))
+				s = s[indx:]
 			}
 		}
 
@@ -382,10 +379,10 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 				visitedNodes[n] = struct{}{}
 				appendParameterValue(&paramValues, q[start:i])
 
-			} else if child, exists := n.getPrefixWildcardParamChild(s); exists {
+			} else if child, exists := n.getSuffixParamChild(s); exists {
 				n = child
-				appendParameterValue(&paramValues, q[start:])
-				break
+				visitedNodes[n] = struct{}{}
+				appendParameterValue(&paramValues, q[start:i])
 
 			} else if n.childNamedParameter {
 				n = n.getChild(ParamStart)
@@ -409,7 +406,7 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 					paramValues = paramValues[:lim]
 					appendParameterValue(&paramValues, q[start:i])
 				} else {
-					n = n.findClosestParentWildcardNode(qc)
+					n = n.findClosestParentWildcardNode()
 					if n != nil {
 						// means that it has :param/static and *wildcard, we go trhough the :param
 						// but the next path segment is not the /static, so go back to *wildcard
@@ -458,7 +455,7 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 
 	if n == nil || !n.end {
 		if n != nil { // we need it on both places, on last segment (below) or on the first unnknown (above).
-			if n = n.findClosestParentWildcardNode(qc); n != nil {
+			if n = n.findClosestParentWildcardNode(); n != nil {
 				params.Set(n.paramKeys[0], q[len(n.staticKey):])
 				return n
 			}
