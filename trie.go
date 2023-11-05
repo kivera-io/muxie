@@ -7,16 +7,21 @@ import (
 
 const (
 	// ParamStart is the character, as a string, which a path pattern starts to define its named parameter.
-	ParamStart = ":"
 	// WildcardParamStart is the character, as a string, which a path pattern starts to define its named parameter for wildcards.
 	// It allows everything else after that path prefix
 	// but the Trie checks for static paths and named parameters before that in order to support everything that other implementations do not,
 	// and if nothing else found then it tries to find the closest wildcard path(super and unique).
+	ParamStart         = ":"
 	WildcardParamStart = "*"
+	PrefixParamStart   = "+:"
+	SuffixParamStart   = "-:"
 
-	PrefixParamStart = "+:"
-
-	SuffixParamStart = "-:"
+	// Node Types
+	Static        = "static"
+	Param         = "param"
+	WildcardParam = "wildcard"
+	PrefixParam   = "prefix"
+	SuffixParam   = "suffix"
 )
 
 // Trie contains the main logic for adding and searching nodes for path segments.
@@ -150,18 +155,6 @@ func slowPathSplit(path string) []string {
 	return strings.Split(path, pathSep)[1:]
 }
 
-func resolveStaticPart(key string) string {
-	i := strings.Index(key, ParamStart)
-	if i == -1 {
-		i = strings.Index(key, WildcardParamStart)
-	}
-	if i == -1 {
-		i = len(key)
-	}
-
-	return key[:i]
-}
-
 func isPrefixParam(key string) bool {
 	return strings.Contains(key, PrefixParamStart)
 }
@@ -180,13 +173,12 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 
 	var paramKeys []string
 
-	for i, s := range input {
+	for _, s := range input {
 		c := s[0]
-		n.pathIndex = i + 1
-		n.paramCount = len(paramKeys)
+
+		childType := Static
 
 		if isParam, isWildcard, isPrefixParam, isSuffixParam := c == ParamStart[0], c == WildcardParamStart[0], isPrefixParam(s), isSuffixParam(s); isParam || isWildcard || isPrefixParam || isSuffixParam {
-			n.hasDynamicChild = true
 			var indx int
 
 			if isParam {
@@ -194,6 +186,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 
 				n.childNamedParameter = true
 				s = ParamStart
+				childType = Param
 
 			} else if isWildcard {
 				paramKeys = append(paramKeys, s[1:]) // without *
@@ -203,6 +196,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 				if t.root == n {
 					t.hasRootWildcard = true
 				}
+				childType = WildcardParam
 
 			} else if isPrefixParam {
 				indx = strings.Index(s, PrefixParamStart)
@@ -211,6 +205,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 				n.childPrefixParameter = true
 				n.addPrefixLength(indx)
 				s = s[:indx+2]
+				childType = PrefixParam
 
 			} else if isSuffixParam {
 				indx = strings.Index(s, SuffixParamStart)
@@ -219,6 +214,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 				n.childSuffixParameter = true
 				n.addSuffixLength(len(s) - (indx + 2))
 				s = s[indx:]
+				childType = SuffixParam
 			}
 		}
 
@@ -232,6 +228,8 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 		}
 
 		n = n.getChild(s)
+		n.nodeType = childType
+		n.paramCount = len(paramKeys)
 	}
 
 	n.Tag = tag
@@ -240,7 +238,6 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 
 	n.paramKeys = paramKeys
 	n.key = key
-	n.staticKey = resolveStaticPart(key)
 	n.end = true
 
 	return n
@@ -371,78 +368,65 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 	for {
 		if i == end || q[i] == pathSepB {
 			s := qc[start:i]
+			matched := false
+
 			if child := n.getChild(s); child != nil {
 				n = child
+				matched = true
 
 			} else if child, exists := n.getPrefixParamChild(s); exists {
 				n = child
 				visitedNodes[n] = struct{}{}
 				appendParameterValue(&paramValues, q[start:i])
+				matched = true
 
 			} else if child, exists := n.getSuffixParamChild(s); exists {
 				n = child
 				visitedNodes[n] = struct{}{}
 				appendParameterValue(&paramValues, q[start:i])
+				matched = true
 
 			} else if n.childNamedParameter {
 				n = n.getChild(ParamStart)
 				visitedNodes[n] = struct{}{}
 				appendParameterValue(&paramValues, q[start:i])
+				matched = true
 
 			} else if n.childWildcardParameter {
 				n = n.getChild(WildcardParamStart)
 				appendParameterValue(&paramValues, q[start:])
 				break
+			}
 
-			} else {
+			// If not matched or have ended on a non-end node
+			if !matched || (i == end && !n.end) {
 				var unvisited *Node
 				if t.searchUnvisitedParams {
 					unvisited, start, i = n.findClosestUnvisitedNode(visitedNodes, qc, i)
 				}
-				if unvisited != nil {
-					n = unvisited
-					visitedNodes[n] = struct{}{}
-					lim := min(n.paramCount, cap(paramValues))
-					paramValues = paramValues[:lim]
-					appendParameterValue(&paramValues, q[start:i])
-				} else {
-					n = n.findClosestParentWildcardNode()
-					if n != nil {
-						// means that it has :param/static and *wildcard, we go trhough the :param
-						// but the next path segment is not the /static, so go back to *wildcard
-						// instead of not found.
-						//
-						// Fixes:
-						// /hello/*p
-						// /hello/:p1/static/:p2
-						// req: http://localhost:8080/hello/dsadsa/static/dsadsa => found
-						// req: http://localhost:8080/hello/dsadsa => but not found!
-						// and
-						// /second/wild/*p
-						// /second/wild/static/otherstatic/
-						// req: /second/wild/static/otherstatic/random => but not found!
-						params.Set(n.paramKeys[0], q[len(n.staticKey):])
-						return n
-					}
+				if unvisited == nil {
 					return nil
-
 				}
+				n = unvisited
+				visitedNodes[n] = struct{}{}
+				lim := n.paramCount - 1
+				if lim < 0 {
+					lim = 0
+				}
+				paramValues = paramValues[:lim]
+				if n.nodeType == WildcardParam {
+					appendParameterValue(&paramValues, q[start:])
+					break
+				}
+				appendParameterValue(&paramValues, q[start:i])
 			}
 
+			// Break condition
 			if i == end {
-				if t.searchUnvisitedParams && !n.end {
-					n, start, i = n.findClosestUnvisitedNode(visitedNodes, qc, i)
-					if n != nil {
-						visitedNodes[n] = struct{}{}
-						lim := min(n.paramCount, cap(paramValues))
-						paramValues = paramValues[:lim]
-						appendParameterValue(&paramValues, q[start:i])
-					}
-					if i == end {
-						break
-					}
+				if !n.end {
+					break
 				}
-				break
+				return nil
 			}
 
 			i++
@@ -453,28 +437,28 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 		i++
 	}
 
-	if n == nil || !n.end {
-		if n != nil { // we need it on both places, on last segment (below) or on the first unnknown (above).
-			if n = n.findClosestParentWildcardNode(); n != nil {
-				params.Set(n.paramKeys[0], q[len(n.staticKey):])
-				return n
-			}
-		}
+	// if n == nil || !n.end {
+	// 	if n != nil { // we need it on both places, on last segment (below) or on the first unnknown (above).
+	// 		if n = n.findClosestParentWildcardNode(); n != nil {
+	// 			params.Set(n.paramKeys[0], q[len(n.staticKey):])
+	// 			return n
+	// 		}
+	// 	}
 
-		if t.hasRootWildcard {
-			// that's the case for root wildcard, tests are passing
-			// even without it but stick with it for reference.
-			// Note ote that something like:
-			// Routes: /other2/*myparam and /other2/static
-			// Reqs: /other2/staticed will be handled
-			// by the /other2/*myparam and not the root wildcard (see above), which is what we want.
-			n = t.root.getChild(WildcardParamStart)
-			params.Set(n.paramKeys[0], q[1:])
-			return n
-		}
+	// 	if t.hasRootWildcard {
+	// 		// that's the case for root wildcard, tests are passing
+	// 		// even without it but stick with it for reference.
+	// 		// Note ote that something like:
+	// 		// Routes: /other2/*myparam and /other2/static
+	// 		// Reqs: /other2/staticed will be handled
+	// 		// by the /other2/*myparam and not the root wildcard (see above), which is what we want.
+	// 		n = t.root.getChild(WildcardParamStart)
+	// 		params.Set(n.paramKeys[0], q[1:])
+	// 		return n
+	// 	}
 
-		return nil
-	}
+	// 	return nil
+	// }
 
 	for i, paramValue := range paramValues {
 		if len(n.paramKeys) > i {

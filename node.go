@@ -11,8 +11,9 @@ import (
 type Node struct {
 	parent *Node
 
+	nodeType string
+
 	children               map[string]*Node
-	hasDynamicChild        bool // does one of the children contains a parameter or wildcard?
 	childNamedParameter    bool // is the child a named parameter (single segmnet)
 	childWildcardParameter bool // or it is a wildcard (can be more than one path segments) ?
 	childPrefixParameter   bool // or it is a prefixed parameter
@@ -21,7 +22,6 @@ type Node struct {
 	childPrefixLengths []int
 	childSuffixLengths []int
 
-	pathIndex  int
 	paramCount int
 
 	paramKeys []string // the param keys without : or *.
@@ -29,7 +29,6 @@ type Node struct {
 	key       string   // if end == true then key is filled with the original value of the insertion's key.
 	// if key != "" && its parent has childWildcardParameter == true,
 	// we need it to track the static part for the closest-wildcard's parameter storage.
-	staticKey string
 
 	// insert main data relative to http and a tag for things like route names.
 	Handler http.Handler
@@ -156,17 +155,25 @@ func (n *Node) findClosestUnvisitedNode(visitedNodes map[*Node]struct{}, path st
 			i = 0
 		}
 		start = strings.LastIndex(path[:i], pathSep) + 1
-		segment := strings.Split(path, pathSep)[n.pathIndex]
+		segment := path[start:i]
 		if child, exists := n.getPrefixParamChild(segment); exists {
 			if _, visited := visitedNodes[child]; !visited {
 				return child, start, i
 			}
-		} else if child, exists := n.getSuffixParamChild(segment); exists {
+		}
+		if child, exists := n.getSuffixParamChild(segment); exists {
 			if _, visited := visitedNodes[child]; !visited {
 				return child, start, i
 			}
-		} else if n.childNamedParameter {
+		}
+		if n.childNamedParameter {
 			child := n.getChild(ParamStart)
+			if _, visited := visitedNodes[child]; !visited {
+				return child, start, i
+			}
+		}
+		if n.childWildcardParameter {
+			child := n.getChild(WildcardParamStart)
 			if _, visited := visitedNodes[child]; !visited {
 				return child, start, i
 			}
