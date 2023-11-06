@@ -427,9 +427,9 @@ func (t *Trie) Search(q string, params ParamsSetter) *Node {
 			// Break condition
 			if i == end {
 				if !n.end {
-					break
+					return nil
 				}
-				return nil
+				break
 			}
 
 			i++
