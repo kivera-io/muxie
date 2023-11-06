@@ -170,13 +170,16 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 	if key == pathSep {
 		t.hasRootSlash = true
 	}
+	n.key = pathSep
 
 	var paramKeys []string
+	var curKey string
 
 	for _, s := range input {
 		c := s[0]
 
-		childType := Static
+		nodeType := Static
+		curKey += pathSep + s
 
 		if isParam, isWildcard, isPrefixParam, isSuffixParam := c == ParamStart[0], c == WildcardParamStart[0], isPrefixParam(s), isSuffixParam(s); isParam || isWildcard || isPrefixParam || isSuffixParam {
 			var indx int
@@ -186,7 +189,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 
 				n.childNamedParameter = true
 				s = ParamStart
-				childType = Param
+				nodeType = Param
 
 			} else if isWildcard {
 				paramKeys = append(paramKeys, s[1:]) // without *
@@ -196,7 +199,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 				if t.root == n {
 					t.hasRootWildcard = true
 				}
-				childType = WildcardParam
+				nodeType = WildcardParam
 
 			} else if isPrefixParam {
 				indx = strings.Index(s, PrefixParamStart)
@@ -205,7 +208,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 				n.childPrefixParameter = true
 				n.addPrefixLength(indx)
 				s = s[:indx+2]
-				childType = PrefixParam
+				nodeType = PrefixParam
 
 			} else if isSuffixParam {
 				indx = strings.Index(s, SuffixParamStart)
@@ -214,7 +217,7 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 				n.childSuffixParameter = true
 				n.addSuffixLength(len(s) - (indx + 2))
 				s = s[indx:]
-				childType = SuffixParam
+				nodeType = SuffixParam
 			}
 		}
 
@@ -228,8 +231,9 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 		}
 
 		n = n.getChild(s)
-		n.nodeType = childType
+		n.nodeType = nodeType
 		n.paramCount = len(paramKeys)
+		n.key = curKey
 	}
 
 	n.Tag = tag
@@ -237,7 +241,6 @@ func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Ha
 	n.Data = optionalData
 
 	n.paramKeys = paramKeys
-	n.key = key
 	n.end = true
 
 	return n
