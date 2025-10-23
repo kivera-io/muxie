@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+type NodeData struct {
+	Data interface{}
+
+	Merge func(*NodeData) error
+}
+
 // Node is the trie's node which path patterns with their data like an HTTP handler are saved to.
 // See `Trie` too.
 type Node struct {
@@ -36,7 +42,7 @@ type Node struct {
 	Tag     string
 
 	// other insert data.
-	Data interface{}
+	Data *NodeData
 }
 
 // NewNode returns a new, empty, Node.

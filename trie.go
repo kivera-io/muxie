@@ -113,10 +113,14 @@ func WithTag(tag string) InsertOption {
 }
 
 // WithData sets the node's optionally `Data` field.
-func WithData(data interface{}) InsertOption {
+func WithData(data *NodeData) InsertOption {
 	return func(n *Node) {
-		// data can be replaced.
-		n.Data = data
+		if n.Data != nil && n.Data.Merge != nil {
+			n.Data.Merge(data)
+
+		} else {
+			n.Data = data
+		}
 	}
 }
 
@@ -170,7 +174,7 @@ func isSuffixParam(key string) bool {
 	return strings.Contains(key, SuffixParamStart)
 }
 
-func (t *Trie) insert(key, tag string, optionalData interface{}, handler http.Handler) *Node {
+func (t *Trie) insert(key, tag string, optionalData *NodeData, handler http.Handler) *Node {
 	input := slowPathSplit(key)
 
 	n := t.root
